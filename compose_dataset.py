@@ -1,16 +1,9 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 build_dataset_wiki_oscar_idemode.py
 
-Версия скрипта, запускаемая из IDE (без argparse). Параметры вверху файла.
-Скачивает русскую Википедию и (по возможности) OSCAR, разбивает на предложения (razdel),
-для каждого предложения формирует clean/raw/char_labels и сохраняет в jsonl.
-
-Установите зависимости:
-    pip install datasets razdel tqdm
-
-Запуск: просто нажмите Run в IDE после настройки переменных в блоке CONFIG.
+Download ru Wiki and Den4ikAI/russian_dialogues datasets from HF.
+Divide on sentences (razdel), form clean / raw (without spaces) / char_labels
+(char_labels[i] = 1 if space goes after i-th char) for each one. Stores to .jsonl file.
 """
 
 from datasets import load_dataset
@@ -20,23 +13,15 @@ import json
 import re
 import sys
 
-# -----------------------------
-# CONFIG: изменяйте здесь
-# -----------------------------
-OUT_PATH = "dataset_oscar.jsonl"  # куда сохранять
-MAX_SENTENCES = 100000  # макс. записей в итоговом файле
-WIKI_CONFIG = "20231101.ru"  # конфиг для wikimedia/wikipedia (попробуйте актуальную дату/конфиг)
-STREAMING = True  # использовать streaming загрузку
-SKIP_OSCAR = False  # если True — не пытаться грузить OSCAR
-MAX_SENTENCE_LEN = 300  # максимальная длина предложения (в символах)
-MIN_SENTENCE_LEN = 6  # минимальная длина предложения (в символах)
-HF_AUTH_TOKEN = None  # если требуется токен HuggingFace, вставьте сюда строку, иначе None
+OUT_PATH = "dataset_dialogues.jsonl"
+MAX_SENTENCES = 100_000
+WIKI_CONFIG = "20231101.ru"
+MAX_SENTENCE_LEN = 300
+MIN_SENTENCE_LEN = 6
+DO_WIKI = True
 
-
-# -----------------------------
 
 def get_text_from_example(example):
-    # Попытка извлечь текст из записи dataset
     for key in ("text", "content", "article", "body", "document", "raw_text", "description"):
         if key in example and example[key]:
             return example[key]
@@ -119,31 +104,25 @@ def process_dataset_split(ds_iterable, out_f, max_to_write, source_name, max_sen
 
 def process_russian_dialogues(ds_iterable, out_f, max_to_write):
     """
-    Специальная обработка Den4ikAI/russian_dialogues:
-    Берём поля 'question' и 'answer' (если есть) и объединяем в одну строку:
-      text = question + ' ' + answer
-    Затем применяем то же sentence_to_raw_and_labels и пишем запись.
+    Handling Den4ikAI/russian_dialogues:
+    Take the fields 'question' and 'answer' and unite 'em into single sentence:
+        text = question + ' ' + answer
     """
     written = 0
     seen = 0
     pbar = tqdm(ds_iterable, desc="Processing russian_dialogues", unit="item")
     for example in pbar:
         seen += 1
-        # example expected to be dict with 'question' and 'answer'
         if not isinstance(example, dict):
             continue
         q = example.get("question") or example.get("q") or ""
         a = example.get("answer") or example.get("a") or ""
-        # skip if both empty
         if not q and not a:
             continue
-        # combine into one short text (как вы просили)
-        # если один из них пуст — возьмём непустой
         if q and a:
             text = f"{q.strip()} {a.strip()}"
         else:
             text = (q or a).strip()
-        # minimal cleaning
         text = re.sub(r"<[^>]+>", " ", text).replace("\r", " ").replace("\n", " ").strip()
         if len(text) < MIN_SENTENCE_LEN or len(text) > MAX_SENTENCE_LEN:
             continue
@@ -169,36 +148,35 @@ def process_russian_dialogues(ds_iterable, out_f, max_to_write):
 def main():
     total_written = 0
     print(
-        f"Configuration:\n OUT_PATH={OUT_PATH}\n MAX_SENTENCES={MAX_SENTENCES}\n WIKI_CONFIG={WIKI_CONFIG}\n STREAMING={STREAMING}\n SKIP_OSCAR={SKIP_OSCAR}\n")
+        f"Configuration:\n OUT_PATH={OUT_PATH}\n MAX_SENTENCES={MAX_SENTENCES}\n WIKI_CONFIG={WIKI_CONFIG}\n")
     with open(OUT_PATH, "w", encoding="utf8") as out_f:
-        # # 1) Wikipedia
-        # try:
-        #     print(f"Loading Wikipedia (config={WIKI_CONFIG}) ...", file=sys.stderr)
-        #     load_kwargs = {"streaming": STREAMING}
-        #     if HF_AUTH_TOKEN:
-        #         load_kwargs["use_auth_token"] = HF_AUTH_TOKEN
-        #     wiki_ds = load_dataset("wikimedia/wikipedia", WIKI_CONFIG, split="train", **load_kwargs)
-        #     written = process_dataset_split(wiki_ds, out_f, MAX_SENTENCES - total_written, "wikipedia", MAX_SENTENCE_LEN, MIN_SENTENCE_LEN)
-        #     total_written += written
-        #     print(f"Wikipedia done. Written: {written}. Total: {total_written}", file=sys.stderr)
-        # except Exception as e:
-        #     print(f"Failed to load/process Wikipedia: {e}", file=sys.stderr)
-
-        # 2) russian_dialogues
-        if total_written < MAX_SENTENCES:
+        if DO_WIKI:
+            # 1) Wikipedia
             try:
-                print("Loading Den4ikAI/russian_dialogues ...", file=sys.stderr)
-                load_kwargs = {"streaming": STREAMING}
-                if HF_AUTH_TOKEN:
-                    load_kwargs["use_auth_token"] = HF_AUTH_TOKEN
-                diag_ds = load_dataset("Den4ikAI/russian_dialogues", split="train", **load_kwargs)
-                written = process_russian_dialogues(diag_ds, out_f, MAX_SENTENCES - total_written)
+                print(f"Loading Wikipedia (config={WIKI_CONFIG}) ...", file=sys.stderr)
+                load_kwargs = {"streaming": True}
+                wiki_ds = load_dataset("wikimedia/wikipedia", WIKI_CONFIG, split="train", **load_kwargs)
+                written = process_dataset_split(wiki_ds, out_f, MAX_SENTENCES - total_written, "wikipedia",
+                                                MAX_SENTENCE_LEN, MIN_SENTENCE_LEN)
                 total_written += written
-                print(f"russian_dialogues done. Written: {written}. Total: {total_written}", file=sys.stderr)
+                print(f"Wikipedia done. Written: {written}. Total: {total_written}", file=sys.stderr)
             except Exception as e:
-                print(f"Failed to load/process Den4ikAI/russian_dialogues: {e}", file=sys.stderr)
+                print(f"Failed to load/process Wikipedia: {e}", file=sys.stderr)
 
-        print(f"Finished. Total written: {total_written}. Output file: {OUT_PATH}", file=sys.stderr)
+        else:
+            # 2) russian_dialogues
+            if total_written < MAX_SENTENCES:
+                try:
+                    print("Loading Den4ikAI/russian_dialogues ...", file=sys.stderr)
+                    load_kwargs = {"streaming": True}
+                    diag_ds = load_dataset("Den4ikAI/russian_dialogues", split="train", **load_kwargs)
+                    written = process_russian_dialogues(diag_ds, out_f, MAX_SENTENCES - total_written)
+                    total_written += written
+                    print(f"russian_dialogues done. Written: {written}. Total: {total_written}", file=sys.stderr)
+                except Exception as e:
+                    print(f"Failed to load/process Den4ikAI/russian_dialogues: {e}", file=sys.stderr)
+
+            print(f"Finished. Total written: {total_written}. Output file: {OUT_PATH}", file=sys.stderr)
 
 
 if __name__ == "__main__":
