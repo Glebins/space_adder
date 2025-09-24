@@ -1,3 +1,8 @@
+# Space adder
+
+Here, models were created that insert spaces in the correct places in Russian sentences.
+This project was done as part of a test assignment during the selection process for an internship at Avito.
+
 # Datasets
 
 Every row has the following pattern:
